@@ -144,21 +144,28 @@ def accuracy_from_logits(logits, targets):
     preds = logits.argmax(dim=1)
     return (preds == targets).float().mean().item()
 
-def run_one_epoch(loader: DataLoader, model: nn.Module, criterion, optimizer=None, device="cpu", use_amp=False):
+def run_one_epoch(loader, model, criterion, optimizer=None, device="cpu", use_amp=False):
     is_train = optimizer is not None
     model.train(is_train)
     epoch_loss, epoch_acc, n = 0.0, 0.0, 0
+
+    # Use new autocast API to avoid the deprecation warning
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
     for images, targets in loader:
-        images = images.to(device, non_blocking=True)
+        images  = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
         if is_train:
             optimizer.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            # autocast for CUDA only when use_amp is True
+            with torch.autocast(device_type=device.type, enabled=use_amp):
                 logits = model(images)
                 loss = criterion(logits, targets)
-            scaler.scale(loss).step(optimizer)
+
+            # ✅ correct AMP order:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
             scaler.update()
         else:
             with torch.no_grad():
@@ -167,9 +174,10 @@ def run_one_epoch(loader: DataLoader, model: nn.Module, criterion, optimizer=Non
 
         bs = images.size(0)
         epoch_loss += loss.item() * bs
-        epoch_acc += accuracy_from_logits(logits, targets) * bs
+        epoch_acc  += (logits.argmax(dim=1) == targets).float().sum().item()
         n += bs
-    return epoch_loss / max(n,1), epoch_acc / max(n,1)
+
+    return epoch_loss / max(n, 1), epoch_acc / max(n, 1)
 
 # -----------------------------
 # Quantization
