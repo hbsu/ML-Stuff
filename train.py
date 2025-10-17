@@ -68,6 +68,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+USER_PLOT_DIR = "runs/mobilenetv1/plots"
 
 # -----------------------------
 # Model: MobileNetV1 (prefer TIMM; fallback to local minimal impl)
@@ -230,6 +231,11 @@ def main():
     parser.add_argument("--quantize", type=str, default="none", choices=["none","int8","fp16"], help="Quantization mode.")
     args = parser.parse_args()
 
+    # Use the user-editable directory if set, else fall back to CLI save_dir
+    plot_dir = Path(USER_PLOT_DIR) if USER_PLOT_DIR else Path(args.save_dir)
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+
     random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
     os.makedirs(args.save_dir, exist_ok=True)
 
@@ -281,14 +287,14 @@ def main():
         model = model.to(device)
 
         # If epochs > 0: training loop
-        train_losses, val_losses, val_accs = [], [], []
+        train_losses, val_losses, train_accs, val_accs = [], [], [], []
         if args.epochs > 0:
             print(f"Training for {args.epochs} epochs on device: {device}")
             use_amp = (args.quantize == "fp16") and device.type == "cuda"
             for epoch in range(1, args.epochs + 1):
                 tl, ta = run_one_epoch(train_loader, model, criterion, optimizer=optimizer, device=device, use_amp=use_amp)
                 vl, va = run_one_epoch(val_loader,   model, criterion, optimizer=None,    device=device, use_amp=False)
-                train_losses.append(tl); val_losses.append(vl); val_accs.append(va)
+                train_losses.append(tl); val_losses.append(vl); val_accs.append(va); train_accs.append(ta)
                 scheduler.step()
                 if epoch % max(1, args.epochs // 10) == 0 or epoch == args.epochs:
                     print(f"Epoch {epoch:03d}: train_loss={tl:.4f}  val_loss={vl:.4f}  val_acc={va*100:.2f}%")
@@ -321,6 +327,7 @@ def main():
 
         # Plot validation curve
         if args.epochs > 0:
+            #loss curve
             fig = plt.figure()
             plt.plot(range(1, len(val_losses)+1), val_losses, label="val_loss")
             plt.plot(range(1, len(train_losses)+1), train_losses, label="train_loss", alpha=0.7)
@@ -330,6 +337,17 @@ def main():
             fig.savefig(out_png, dpi=150, bbox_inches="tight")
             plt.close(fig)
             print(f"[info] Saved validation curve: {out_png}")
+
+            #accuracy curve
+            fig = plt.figure()
+            plt.plot(range(1, len(val_accs)+1),  [a*100.0 for a in val_accs],  label="val_acc (%)")
+            plt.plot(range(1, len(train_accs)+1),[a*100.0 for a in train_accs],label="train_acc (%)", alpha=0.7)
+            plt.xlabel("Epoch"); plt.ylabel("Accuracy (%)"); plt.title(f"Accuracy Curve — split {split_idx}")
+            plt.legend(); plt.grid(True, linestyle=":")
+            out_png = plot_dir / f"acc_curve_split{split_idx}.png"
+            fig.savefig(out_png, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"[info] Saved accuracy curve: {out_png}")
 
     # Plot cross‑validation error summary
     fig = plt.figure()
